@@ -8,7 +8,15 @@ Wave Tracer is a C++ real-time editor built with GLFW, ImGui, OpenGL, and a cust
 - `editor/` - editor application source
 - `libs/` - bundled dependencies
 
-Third-party libraries are expected under `libs/`. If this repo uses Git submodules, run:
+All third-party libraries are managed with Git submodules. After cloning the repository, initialize and update the submodules before building.
+
+For a fresh clone:
+
+```bash
+git clone --recursive https://github.com/ilya496/wave_tracer.git
+```
+
+If you already cloned without submodules:
 
 ```bash
 git submodule update --init --recursive
@@ -35,17 +43,6 @@ cmake --build . --config Debug
 ```
 
 ### Linux
-
-```bash
-cd ~/Desktop/projects/wave_tracer
-mkdir -p build
-cd build
-cmake ..
-cmake --build . --config Debug
-./editor/Debug/wave_tracer
-```
-
-### macOS
 
 ```bash
 cd ~/Desktop/projects/wave_tracer
