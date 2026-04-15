@@ -1,12 +1,235 @@
 #include "Window.h"
 
-Window::Window(const std::string& title, uint32_t width, uint32_t height, bool vSync, bool maximized)
-    : m_Title(title), m_Width(width), m_Height(height), m_VSync(vSync), m_Maximized(maximized) {
-    Init();
-}
+#include <iostream>
+#include "Event.h"
+#include "EventBus.h"
+
+static bool s_WindowInitialized = false;
 
 Window::Window(const WindowProps& props)
-    : m_Title(props.Title), m_Width(props.Width), m_Height(props.Height),
-    m_VSync(props.VSync), m_Maximized(props.Maximized) {
+    : m_Width(props.width), m_Height(props.height), m_Title(props.title), m_VSync(props.VSync)
+{
     Init();
+
+    if (props.Maximized)
+        Maximize();
+}
+
+Window::~Window()
+{
+    glfwDestroyWindow(m_Window);
+}
+
+void Window::Init()
+{
+    if (!s_WindowInitialized)
+    {
+        if (!glfwInit())
+        {
+            std::cerr << "Failed to initialize window!" << '\n';
+        }
+        s_WindowInitialized = true;
+    }
+
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 6);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+    m_Window = glfwCreateWindow(m_Width, m_Height, m_Title.c_str(), nullptr, nullptr);
+
+    if (!m_Window)
+        std::cerr << "Failed to create GLFW window!" << '\n';
+
+    glfwMakeContextCurrent(m_Window);
+    SetVSync(m_VSync);
+
+    glfwSetWindowUserPointer(m_Window, this);
+
+    InitCallbacks();
+}
+
+void Window::OnUpdate()
+{
+    glfwPollEvents();
+    glfwSwapBuffers(m_Window);
+}
+
+void Window::SetTitle(const std::string& title)
+{
+    m_Title = title;
+    glfwSetWindowTitle(m_Window, title.c_str());
+}
+
+void Window::SetVSync(bool enabled)
+{
+    glfwSwapInterval(enabled ? 1 : 0);
+    m_VSync = enabled;
+}
+
+Window::ivec2 Window::GetFramebufferSize() const
+{
+    int w, h;
+    glfwGetFramebufferSize(m_Window, &w, &h);
+    return { (float)w, (float)h };
+}
+
+Window::ivec2 Window::GetPosition() const
+{
+    int x, y;
+    glfwGetWindowPos(m_Window, &x, &y);
+    return { (float)x, (float)y };
+}
+
+void Window::SetPosition(int x, int y)
+{
+    glfwSetWindowPos(m_Window, x, y);
+}
+
+void Window::Minimize()
+{
+    glfwIconifyWindow(m_Window);
+}
+
+void Window::Maximize()
+{
+    glfwMaximizeWindow(m_Window);
+}
+
+void Window::Restore()
+{
+    glfwRestoreWindow(m_Window);
+}
+
+bool Window::IsMaximized() const
+{
+    return glfwGetWindowAttrib(m_Window, GLFW_MAXIMIZED);
+}
+
+void Window::MakeContextCurrent()
+{
+    glfwMakeContextCurrent(m_Window);
+}
+
+void Window::DetachContext()
+{
+    glfwMakeContextCurrent(nullptr);
+}
+
+void Window::PollEvents()
+{
+    glfwPollEvents();
+}
+
+void Window::SwapBuffers()
+{
+    glfwSwapBuffers(m_Window);
+}
+
+void Window::Close()
+{
+    glfwSetWindowShouldClose(m_Window, true);
+}
+
+void Window::SetFullscreen(bool enabled)
+{
+    if (enabled == m_IsFullscreen)
+        return;
+
+    if (enabled)
+    {
+        m_PreviousMonitor = glfwGetWindowMonitor(m_Window);
+
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+
+        glfwSetWindowMonitor(m_Window, monitor,
+            0, 0,
+            mode->width, mode->height,
+            mode->refreshRate);
+    }
+    else
+    {
+        glfwSetWindowMonitor(m_Window, nullptr,
+            100, 100,
+            m_Width, m_Height,
+            0);
+    }
+
+    m_IsFullscreen = enabled;
+}
+
+void Window::InitCallbacks()
+{
+    glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* wnd, int w, int h)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            WindowResizeEvent ev(w, h);
+            EventBus::Publish(ev);
+        });
+
+    glfwSetWindowCloseCallback(m_Window, [](GLFWwindow* wnd)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            WindowCloseEvent ev{};
+            EventBus::Publish(ev);
+        });
+
+    glfwSetKeyCallback(m_Window, [](GLFWwindow* wnd, int key, int sc, int action, int mods)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            if (action == GLFW_PRESS)
+            {
+                KeyPressedEvent ev(key, 0);
+                EventBus::Publish(ev);
+            }
+            else if (action == GLFW_REPEAT)
+            {
+                KeyPressedEvent ev(key, 1);
+                EventBus::Publish(ev);
+            }
+            else if (action == GLFW_RELEASE)
+            {
+                KeyReleasedEvent ev(key);
+                EventBus::Publish(ev);
+            }
+        });
+
+    glfwSetMouseButtonCallback(m_Window, [](GLFWwindow* wnd, int button, int action, int mods)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            if (action == GLFW_PRESS)
+            {
+                MouseButtonPressedEvent ev(button);
+                EventBus::Publish(ev);
+            }
+            else if (action == GLFW_RELEASE)
+            {
+                MouseButtonReleasedEvent ev(button);
+                EventBus::Publish(ev);
+            }
+        });
+
+    glfwSetCursorPosCallback(m_Window, [](GLFWwindow* wnd, double x, double y)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            Vec2 currentPos = { (float)x, (float)y };
+            Vec2 delta = { currentPos.x - window->m_LastMousePos.x, currentPos.y - window->m_LastMousePos.y };
+            window->m_LastMousePos = currentPos;
+
+            MouseMovedEvent ev(currentPos.x, currentPos.y);
+            EventBus::Publish(ev);
+        });
+
+    glfwSetScrollCallback(m_Window, [](GLFWwindow* wnd, double x, double y)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            MouseScrolledEvent ev((float)x, (float)y);
+            EventBus::Publish(ev);
+        });
 }

@@ -26,6 +26,9 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw)
 
+add_library(glad "${CMAKE_SOURCE_DIR}/libs/glad/src/glad.c")
+target_include_directories(glad PUBLIC "${CMAKE_SOURCE_DIR}/libs/glad/include")
+
 add_library(glm INTERFACE)
 target_include_directories(glm INTERFACE libs/glm)
 
