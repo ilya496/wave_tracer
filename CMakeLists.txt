@@ -4,7 +4,6 @@ project(WaveTracer)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Third-party — built once, shared by both subprojects
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -27,8 +26,10 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw)
 
+add_library(glm INTERFACE)
+target_include_directories(glm INTERFACE libs/glm)
+
 find_package(OpenGL REQUIRED)
 
-# Your subprojects — order matters, engine must come first
 add_subdirectory(engine)
 add_subdirectory(editor)

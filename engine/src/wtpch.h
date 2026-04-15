@@ -8,7 +8,7 @@
 #include <map>
 #include <unordered_map>
 
-#include "Core/Base.h"
-#include "Core/Application.h"
-#include "Core/Layer.h"
-#include "Core/Event.h"
+#include "core/Base.h"
+#include "core/Application.h"
+#include "core/Layer.h"
+#include "core/Event.h"

@@ -3,6 +3,9 @@
 Application::Application() {
 }
 
+Application::~Application() {
+}
+
 void Application::Run() {
     while (m_Running) {
         // float time = m_Timer.GetTime();

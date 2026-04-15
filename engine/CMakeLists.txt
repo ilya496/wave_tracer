@@ -1,11 +1,9 @@
 add_library(wave_tracer_engine STATIC
     src/core/Application.cpp
-    # src/core/Window.cpp
-    # src/core/LayerStack.cpp
-    # src/core/UUID.cpp
-    # src/audio/AudioEngine.cpp
-    # src/audio/AudioMixer.cpp
+)
+
+target_include_directories(wave_tracer_engine PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_precompile_headers(wave_tracer_engine PUBLIC src/wtpch.h)
-

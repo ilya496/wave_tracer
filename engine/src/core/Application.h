@@ -9,17 +9,17 @@ public:
 
     void Run();
 
-    void PushLayer(Layer* layer);
-    void PushOverlay(Layer* overlay);
+    // void PushLayer(Layer* layer);
+    // void PushOverlay(Layer* overlay);
 
     // Window& GetWindow();
-    static Application& Get();
+    // static Application& Get();
 
 protected:
     virtual void Shutdown() {}
 
 private:
-    void OnEvent(Event& e);
+    // void OnEvent(Event& e);
     // bool OnWindowClose(WindowCloseEvent& e);
     // bool OnWindowResize(WindowResizeEvent& e);
 
