@@ -6,7 +6,8 @@ class Editor : public Application
 public:
     Editor() : Application()
     {
-        PushLayer(new EditorLayer());
+        Window* window = Application::GetWindow();
+        PushLayer(new EditorLayer(*window));
     }
 
     virtual void Shutdown() override

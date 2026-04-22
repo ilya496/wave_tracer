@@ -5,8 +5,9 @@
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-struct WindowProps
-{
+#include <glm/glm.hpp>
+
+struct WindowProps {
     std::string title = "Wave Tracer";
     int width = 1920;
     int height = 1080;
@@ -14,8 +15,7 @@ struct WindowProps
     bool Maximized = true;
 };
 
-class Window
-{
+class Window {
 public:
     Window(const WindowProps& props = {});
     ~Window();
@@ -26,12 +26,10 @@ public:
     bool IsVSync() const { return m_VSync; }
     void SetVSync(bool enabled);
 
-    struct Vec2 { float x, y; };
-    using ivec2 = Vec2;  // Simplified - treating as float for now
-
-    ivec2 GetFramebufferSize() const;
-    ivec2 GetPosition() const;
+    glm::ivec2 GetFramebufferSize() const;
+    glm::ivec2 GetPosition() const;
     void SetPosition(int x, int y);
+    void SetPosition(const glm::ivec2& pos);
 
     GLFWwindow* GetNativeWindow() const { return m_Window; }
 
@@ -63,5 +61,5 @@ private:
     bool m_IsFullscreen = false;
     GLFWmonitor* m_PreviousMonitor = nullptr;
 
-    Vec2 m_LastMousePos;
+    glm::vec2 m_LastMousePos;
 };

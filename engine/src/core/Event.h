@@ -1,7 +1,7 @@
 #pragma once
 
 enum class EventType {
-    WindowClose, WindowResize,
+    WindowClose, WindowResize, WindowDpiChanged,
     KeyPressed, KeyReleased, KeyTyped,
     MouseButtonPressed, MouseButtonReleased, MouseMoved, MouseScrolled,
     // audio events
@@ -52,6 +52,20 @@ public:
     unsigned int GetHeight() const { return m_Height; }
 private:
     unsigned int m_Width, m_Height;
+};
+
+class WindowDpiChangedEvent : public Event {
+public:
+    WindowDpiChangedEvent(float xscale, float yscale)
+        : m_XScale(xscale), m_YScale(yscale) {
+    }
+    static EventType GetStaticType() { return EventType::WindowDpiChanged; }
+    EventType GetEventType() const override { return GetStaticType(); }
+    const char* GetName() const override { return "WindowDpiChanged"; }
+    float GetXScale() const { return m_XScale; }
+    float GetYScale() const { return m_YScale; }
+private:
+    float m_XScale, m_YScale;
 };
 
 // Key Events

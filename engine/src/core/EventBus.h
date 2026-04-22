@@ -1,46 +1,35 @@
 #pragma once
 
 #include "Event.h"
-#include <functional>
-#include <vector>
-#include <unordered_map>
+#include "wtpch.h"
 
 class EventBus {
 public:
     using EventCallback = std::function<void(Event&)>;
 
+    template<typename T>
+    static void Subscribe(std::function<void(T&)> callback) {
+        Get().m_Subscribers[typeid(T)].push_back(
+            [callback](Event& e) {
+                callback(static_cast<T&>(e));
+            }
+        );
+    }
+
+    static void Publish(Event& event) {
+        auto& subs = Get().m_Subscribers[typeid(event)];
+        for (auto& cb : subs) {
+            cb(event);
+            if (event.Handled)
+                break;
+        }
+    }
+
+private:
+    std::unordered_map<std::type_index, std::vector<EventCallback>> m_Subscribers;
+
     static EventBus& Get() {
         static EventBus instance;
         return instance;
     }
-
-    // Subscribe to an event type
-    template<typename T>
-    static void Subscribe(EventCallback callback) {
-        Get().SubscribeImpl(typeid(T), callback);
-    }
-
-    // Publish an event
-    static void Publish(Event& event) {
-        Get().PublishImpl(event);
-    }
-
-private:
-    EventBus() = default;
-
-    void SubscribeImpl(const std::type_info& type, EventCallback callback) {
-        m_Subscribers[type.name()].push_back(callback);
-    }
-
-    void PublishImpl(Event& event) {
-        auto it = m_Subscribers.find(typeid(event).name());
-        if (it != m_Subscribers.end()) {
-            for (auto& callback : it->second) {
-                callback(event);
-                if (event.Handled) break;
-            }
-        }
-    }
-
-    std::unordered_map<std::string, std::vector<EventCallback>> m_Subscribers;
 };

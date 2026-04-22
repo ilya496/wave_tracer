@@ -7,6 +7,11 @@
 #include <functional>
 #include <map>
 #include <unordered_map>
+#include <filesystem>
+#include <chrono>
+#include <thread>
+#include <mutex>
+#include <typeindex>
 
 #include "core/Base.h"
 #include "core/Layer.h"

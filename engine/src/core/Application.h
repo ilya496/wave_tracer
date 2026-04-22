@@ -35,6 +35,7 @@ private:
     bool m_Minimized = false;
     float m_LastFrameTime = 0.0f;
 
+
 private:
     static Application* s_Instance;
 };

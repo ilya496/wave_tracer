@@ -66,14 +66,14 @@ void Window::SetVSync(bool enabled)
     m_VSync = enabled;
 }
 
-Window::ivec2 Window::GetFramebufferSize() const
+glm::ivec2 Window::GetFramebufferSize() const
 {
     int w, h;
     glfwGetFramebufferSize(m_Window, &w, &h);
     return { (float)w, (float)h };
 }
 
-Window::ivec2 Window::GetPosition() const
+glm::ivec2 Window::GetPosition() const
 {
     int x, y;
     glfwGetWindowPos(m_Window, &x, &y);
@@ -83,6 +83,11 @@ Window::ivec2 Window::GetPosition() const
 void Window::SetPosition(int x, int y)
 {
     glfwSetWindowPos(m_Window, x, y);
+}
+
+void Window::SetPosition(const glm::ivec2& pos)
+{
+    glfwSetWindowPos(m_Window, pos.x, pos.y);
 }
 
 void Window::Minimize()
@@ -217,8 +222,8 @@ void Window::InitCallbacks()
         {
             Window* window = (Window*)glfwGetWindowUserPointer(wnd);
 
-            Vec2 currentPos = { (float)x, (float)y };
-            Vec2 delta = { currentPos.x - window->m_LastMousePos.x, currentPos.y - window->m_LastMousePos.y };
+            glm::vec2 currentPos = { (float)x, (float)y };
+            glm::vec2 delta = { currentPos.x - window->m_LastMousePos.x, currentPos.y - window->m_LastMousePos.y };
             window->m_LastMousePos = currentPos;
 
             MouseMovedEvent ev(currentPos.x, currentPos.y);
@@ -232,4 +237,14 @@ void Window::InitCallbacks()
             MouseScrolledEvent ev((float)x, (float)y);
             EventBus::Publish(ev);
         });
+
+    glfwSetWindowContentScaleCallback(m_Window, [](GLFWwindow* wnd, float xscale, float yscale)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+
+            WindowDpiChangedEvent ev(xscale, yscale);
+            EventBus::Publish(ev);
+        });
 }
+
+
