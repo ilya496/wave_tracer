@@ -26,6 +26,16 @@ target_include_directories(imgui PUBLIC
 )
 target_link_libraries(imgui PUBLIC glfw)
 
+set(IMPLOT_DIR libs/implot)
+add_library(implot STATIC
+    ${IMPLOT_DIR}/implot.cpp
+    ${IMPLOT_DIR}/implot_items.cpp
+)
+target_include_directories(implot PUBLIC
+    ${IMPLOT_DIR}
+)
+target_link_libraries(implot PUBLIC imgui)
+
 add_library(glad "${CMAKE_SOURCE_DIR}/libs/glad/src/glad.c")
 target_include_directories(glad PUBLIC "${CMAKE_SOURCE_DIR}/libs/glad/include")
 

@@ -12,6 +12,8 @@
 #include <thread>
 #include <mutex>
 #include <typeindex>
+#include <random>
+#include <sstream>
 
 #include "core/Base.h"
 #include "core/Layer.h"
