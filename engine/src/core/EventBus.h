@@ -25,6 +25,10 @@ public:
         }
     }
 
+    static void Publish(Event&& event) {
+        Publish(static_cast<Event&>(event));
+    }
+
 private:
     std::unordered_map<std::type_index, std::vector<EventCallback>> m_Subscribers;
 
