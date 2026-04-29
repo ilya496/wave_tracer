@@ -226,7 +226,7 @@ void WaveformPanel::RenderWaveform()
 
     ImPlot::SetNextAxesLimits(
         m_ZoomMin, m_ZoomMax,
-        -1.05, 1.05,
+        -2.00, 2.00,
         m_FitOnNextDraw ? ImPlotCond_Always : ImPlotCond_Once
     );
     m_FitOnNextDraw = false;
@@ -236,7 +236,7 @@ void WaveformPanel::RenderWaveform()
     {
         ImPlot::SetupAxis(ImAxis_X1, "Time (s)");
         ImPlot::SetupAxis(ImAxis_Y1, "Amplitude");
-        ImPlot::SetupAxisLimitsConstraints(ImAxis_Y1, -1.05, 1.05);
+        ImPlot::SetupAxisLimitsConstraints(ImAxis_Y1, -2.00, 2.00);
 
         const int n = timeSize;
 
