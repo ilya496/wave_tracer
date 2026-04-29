@@ -9,6 +9,8 @@
 #include "core/Application.h"
 #include "core/Window.h"
 
+#include "import/AudioImporter.h"
+
 EditorLayer::EditorLayer(Window& window) : Layer("EditorLayer"), m_Window(window) {
 }
 
@@ -44,6 +46,34 @@ void EditorLayer::OnAttach() {
     ImGui_ImplGlfw_InitForOpenGL(m_Window.GetNativeWindow(), true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
+    glfwSetWindowUserPointer(m_Window.GetNativeWindow(), this);
+
+    glfwSetDropCallback(m_Window.GetNativeWindow(),
+        [](GLFWwindow* window, int count, const char** paths)
+        {
+            if (count == 0) return;
+
+            // Only handle the first dropped file for now.
+            // If we later want multi-file support, iterate and queue all paths.
+            auto* layer = static_cast<EditorLayer*>(glfwGetWindowUserPointer(window));
+            if (!layer) return;
+
+            // Prefer audio files if multiple items are dropped simultaneously
+            for (int i = 0; i < count; ++i)
+            {
+                if (AudioImporter::IsSupportedFormat(paths[i]))
+                {
+                    layer->m_PendingDropPath = paths[i];
+                    layer->m_HasPendingDrop = true;
+                    return; // take the first supported file
+                }
+            }
+
+            std::cerr << "[EditorLayer] Dropped file(s) are not a supported audio format.\n";
+        }
+    );
+
+
     EventBus::Subscribe<WindowDpiChangedEvent>(
         [this](WindowDpiChangedEvent& e)
         {
@@ -53,62 +83,64 @@ void EditorLayer::OnAttach() {
 }
 
 void EditorLayer::OnDetach() {
+    glfwSetDropCallback(m_Window.GetNativeWindow(), nullptr);
+
+    ImPlot::DestroyContext();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
 }
 
-void EditorLayer::OnUpdate(float dt) {
+void EditorLayer::OnUpdate(float dt)
+{
+    // Consume any pending drop — import happens here (main thread, not in callback)
+    if (m_HasPendingDrop)
+    {
+        m_HasPendingDrop = false;
+        HandleDroppedFile(m_PendingDropPath);
+        m_PendingDropPath.clear();
+    }
+
+    // --- ImGui frame start ---
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    bool dockspaceOpen = true;
-    bool optFullscreen = true;
+    // --- Fullscreen dockspace ---
+    ImGuiWindowFlags windowFlags =
+        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking |
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
 
-    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
-
-    if (optFullscreen)
-    {
-        const ImGuiViewport* vp = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(vp->WorkPos);
-        ImGui::SetNextWindowSize(vp->WorkSize);
-        ImGui::SetNextWindowViewport(vp->ID);
-        windowFlags |= ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove;
-        windowFlags |= ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus;
-    }
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::SetNextWindowViewport(vp->ID);
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    bool dockspaceOpen = true;
     ImGui::Begin("Dockspace Window", &dockspaceOpen, windowFlags);
     ImGui::PopStyleVar();
 
     ImGuiID dockspaceID = ImGui::GetID("MyDockspace");
     ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 
+    // --- Menu bar ---
     if (ImGui::BeginMenuBar())
     {
         if (ImGui::BeginMenu("File"))
         {
-            if (ImGui::MenuItem("Save Project", "Ctrl+S"))
+            if (ImGui::MenuItem("Open Audio File...", "Ctrl+O"))
             {
+                // TODO: native file dialog (e.g. nfd / pfd)
             }
-
-            if (ImGui::MenuItem("Open Project...", "Ctrl+O"))
-            {
-            }
-
-            if (ImGui::MenuItem("Close Project", "Ctrl+W"))
-            {
-            }
-
-            if (ImGui::MenuItem("Export Simulation", "Ctrl+E"))
-            {
-            }
-
+            if (ImGui::MenuItem("Save Project", "Ctrl+S")) {}
+            if (ImGui::MenuItem("Close Project", "Ctrl+W")) {}
+            if (ImGui::MenuItem("Export", "Ctrl+E")) {}
+            ImGui::Separator();
             if (ImGui::MenuItem("Exit"))
                 EventBus::Publish(WindowCloseEvent{});
-
             ImGui::EndMenu();
         }
         ImGui::EndMenuBar();
@@ -117,21 +149,34 @@ void EditorLayer::OnUpdate(float dt) {
     ImGui::End();
 }
 
-void EditorLayer::OnImGuiRender() {
-    ImGui::Begin("Hello, Wave Tracer!");
-    ImGui::Text("Welcome to the editor.");
 
-    if (ImPlot::BeginPlot("Example")) {
-        double x[] = { 1, 2, 3, 4, 5 };
-        double y[] = { 1, 2, 3, 4, 5 };
-        ImPlot::PlotLine("My Line", x, y, 5);
-        ImPlot::EndPlot();
-    }
-    ImGui::End();
+void EditorLayer::OnImGuiRender() {
+    m_WaveformPanel.OnImGuiRender();
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
+
+void EditorLayer::HandleDroppedFile(const std::string& path)
+{
+    std::cout << "[EditorLayer] Importing: " << path << "\n";
+
+    Ref<AudioClip> clip = AudioImporter::Import(path);
+    if (!clip)
+    {
+        std::cerr << "[EditorLayer] Import failed for: " << path << "\n";
+        return;
+    }
+
+    std::cout << "[EditorLayer] Loaded "
+        << clip->GetFrameCount() << " frames @ "
+        << clip->GetSampleRate() << " Hz, "
+        << clip->GetChannels() << " ch, "
+        << clip->GetDuration() << "s\n";
+
+    m_WaveformPanel.LoadClip(clip);
+}
+
 
 void EditorLayer::ApplyDpiScaling(float scale) {
     ImGuiIO& io = ImGui::GetIO();

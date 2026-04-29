@@ -1,6 +1,7 @@
 add_executable(wave_tracer
     src/main.cpp
     src/EditorLayer.cpp
+    src/WaveformPanel.cpp
 )
 
 target_include_directories(wave_tracer PRIVATE
