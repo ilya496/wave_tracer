@@ -3,6 +3,7 @@
 #include <iostream>
 #include "Event.h"
 #include "EventBus.h"
+#include "import/AudioImporter.h"
 
 static bool s_WindowInitialized = false;
 
@@ -164,6 +165,16 @@ void Window::SetFullscreen(bool enabled)
     m_IsFullscreen = enabled;
 }
 
+void Window::QueueDroppedFile(const char* path) {
+    m_DroppedFiles.emplace_back(path);
+}
+
+std::vector<std::filesystem::path> Window::ConsumeDroppedFiles() {
+    std::vector<std::filesystem::path> out;
+    out.swap(m_DroppedFiles);
+    return out;
+}
+
 void Window::InitCallbacks()
 {
     glfwSetWindowSizeCallback(m_Window, [](GLFWwindow* wnd, int w, int h)
@@ -246,6 +257,16 @@ void Window::InitCallbacks()
             WindowDpiChangedEvent ev(xscale, yscale);
             EventBus::Publish(ev);
         });
+
+    glfwSetDropCallback(m_Window, [](GLFWwindow* wnd, int count, const char** paths)
+        {
+            Window* window = (Window*)glfwGetWindowUserPointer(wnd);
+            if (!window) return;
+
+            for (int i = 0; i < count; ++i)
+            {
+                if (AudioImporter::IsSupportedFormat(paths[i]))
+                    window->QueueDroppedFile(paths[i]);
+            }
+        });
 }
-
-

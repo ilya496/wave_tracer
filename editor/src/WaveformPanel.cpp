@@ -7,8 +7,10 @@
 #include "wtpch.h"
 
 void WaveformPanel::LoadClip(Ref<AudioClip> clip) {
-    if (!clip || !clip->IsValid())
+    if (!clip || !clip->IsValid()) {
+        std::cerr << "[WaveformPanel] LoadClip: invalid clip" << std::endl;
         return;
+    }
 
     m_Clip = clip;
     m_SelectedChannel = 0;
@@ -33,28 +35,38 @@ void WaveformPanel::OnImGuiRender() {
     ImGui::End();
 }
 
-void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints) {
-    m_View = {};
+void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints)
+{
+    m_View.Reset();
 
     if (!m_Clip || !m_Clip->IsValid())
         return;
 
     const auto& samples = m_Clip->GetSamples();
-    const uint32_t channels = m_Clip->GetChannels();
-    const uint64_t frameCount = m_Clip->GetFrameCount();
-    const float sampleRate = static_cast<float>(m_Clip->GetSampleRate());
+    const uint32_t chans = m_Clip->GetChannels();
+    const uint64_t frames = m_Clip->GetFrameCount();
+    const float sr = static_cast<float>(m_Clip->GetSampleRate());
 
-    channel = std::clamp(channel, 0u, channels - 1u);
+    if (chans == 0 || frames == 0 || sr <= 0.0f)
+        return;
 
-    // how many source frames fall into each display bucket
-    const int buckets = std::min(static_cast<int>(frameCount), static_cast<int>(targetPoints));
-    const double framesPerBucket = static_cast<double>(frameCount) / buckets;
+    const uint64_t expectedSamples = frames * static_cast<uint64_t>(chans);
+    if (samples.size() < expectedSamples)
+        return;
+
+    channel = std::clamp(channel, 0u, chans - 1u);
+
+    const size_t buckets = static_cast<size_t>(std::min<uint64_t>(frames, targetPoints));
+    if (buckets == 0)
+        return;
+
+    const double framesPerBucket = static_cast<double>(frames) / static_cast<double>(buckets);
 
     m_View.time.resize(buckets);
     m_View.minEnv.resize(buckets);
     m_View.maxEnv.resize(buckets);
 
-    for (int b = 0; b < buckets; ++b)
+    for (size_t b = 0; b < buckets; ++b)
     {
         const uint64_t frameStart = static_cast<uint64_t>(b * framesPerBucket);
         const uint64_t frameEnd = static_cast<uint64_t>((b + 1) * framesPerBucket);
@@ -62,17 +74,21 @@ void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints) {
         float minVal = 1.0f;
         float maxVal = -1.0f;
 
-        for (uint64_t f = frameStart; f < frameEnd && f < frameCount; ++f)
+        for (uint64_t f = frameStart; f < frameEnd && f < frames; ++f)
         {
-            const float s = samples[f * channels + channel];
-            if (s < minVal) minVal = s;
-            if (s > maxVal) maxVal = s;
+            const uint64_t idx = f * static_cast<uint64_t>(chans) + channel;
+            if (idx >= samples.size())
+                break;
+
+            const float s = samples[idx];
+            minVal = std::min(minVal, s);
+            maxVal = std::max(maxVal, s);
         }
 
-        // Guard against empty buckets at the very end
-        if (minVal > maxVal) minVal = maxVal = 0.0f;
+        if (minVal > maxVal)
+            minVal = maxVal = 0.0f;
 
-        m_View.time[b] = static_cast<double>(frameStart) / sampleRate;
+        m_View.time[b] = static_cast<double>(frameStart) / sr;
         m_View.minEnv[b] = static_cast<double>(minVal);
         m_View.maxEnv[b] = static_cast<double>(maxVal);
     }
@@ -84,17 +100,12 @@ void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints) {
     m_ZoomMax = m_Clip->GetDuration();
 }
 
-// ---------------------------------------------------------------------------
-// Private — UI
-// ---------------------------------------------------------------------------
-
 void WaveformPanel::RenderDropZone()
 {
-    // Centred "drop a file here" hint that fills the panel
+    // centred hint
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const ImVec2 cursor = ImGui::GetCursorScreenPos();
 
-    // Dashed border rect
     ImDrawList* dl = ImGui::GetWindowDrawList();
     dl->AddRect(
         cursor,
@@ -105,9 +116,9 @@ void WaveformPanel::RenderDropZone()
         2.0f    // thickness
     );
 
-    // Centred label — ImGui has no native AddRectDashed so we fall back to AddRect if unavailable
     const char* label = "Drop an audio file here";
-    const char* sublabel = "Supported: .mp3  .wav  .flac";
+    // const char* sublabel = "Supported: .mp3 .wav .flac";
+    const char* sublabel = "Supported: .wav .wave";
 
     const ImVec2 labelSize = ImGui::CalcTextSize(label);
     const ImVec2 sublabelSize = ImGui::CalcTextSize(sublabel);
@@ -132,21 +143,19 @@ void WaveformPanel::RenderMetadata()
 
     const auto& meta = m_Clip->GetMetadata();
 
-    // Format name
     const char* fmtName = "Unknown";
     switch (meta.format)
     {
-    case AudioFileFormat::MP3:  fmtName = "MP3";  break;
-    case AudioFileFormat::WAV:  fmtName = "WAV";  break;
+    case AudioFileFormat::MP3: fmtName = "MP3";  break;
+    case AudioFileFormat::WAV: fmtName = "WAV";  break;
     case AudioFileFormat::FLAC: fmtName = "FLAC"; break;
     default: break;
     }
 
     ImGui::TextDisabled("File:"); ImGui::SameLine();
-    // Show just the filename, not the full path
     const std::string& srcPath = m_Clip->GetSourcePath();
-    const size_t       slash = srcPath.find_last_of("/\\");
-    const std::string  name = (slash != std::string::npos)
+    const size_t slash = srcPath.find_last_of("/\\");
+    const std::string name = (slash != std::string::npos)
         ? srcPath.substr(slash + 1)
         : srcPath;
     ImGui::Text("%s", name.c_str());
@@ -169,7 +178,6 @@ void WaveformPanel::RenderMetadata()
     const float  secs = meta.durationSeconds - mins * 60.0f;
     ImGui::Text("%d:%05.2f", mins, secs);
 
-    // Channel selector (only visible for multi-channel files)
     if (meta.channels > 1)
     {
         ImGui::SameLine(0, 20);
@@ -193,16 +201,28 @@ void WaveformPanel::RenderMetadata()
 
 void WaveformPanel::RenderWaveform()
 {
+    std::cerr << "[WaveformPanel] RenderWaveform entry ready=" << m_View.ready
+        << " time=" << m_View.time.size()
+        << " minEnv=" << m_View.minEnv.size()
+        << " maxEnv=" << m_View.maxEnv.size() << std::endl;
+
     if (!m_View.ready) return;
 
-    // Let ImPlot fill the remaining panel space
+    const int timeSize = static_cast<int>(m_View.time.size());
+    const int minEnvSize = static_cast<int>(m_View.minEnv.size());
+    const int maxEnvSize = static_cast<int>(m_View.maxEnv.size());
+
+    if (timeSize <= 0 || minEnvSize != timeSize || maxEnvSize != timeSize) {
+        std::cerr << "[WaveformPanel] Invalid view data: time=" << timeSize
+            << " minEnv=" << minEnvSize << " maxEnv=" << maxEnvSize << "\n";
+        return;
+    }
+
     const ImVec2 plotSize = { -1.0f, -1.0f };
 
     ImPlot::PushStyleVar(ImPlotStyleVar_PlotPadding, ImVec2(8, 8));
     ImPlot::PushStyleColor(ImPlotCol_PlotBg, ImVec4(0.08f, 0.08f, 0.08f, 1.0f));
     ImPlot::PushStyleColor(ImPlotCol_FrameBg, ImVec4(0.05f, 0.05f, 0.05f, 1.0f));
-    // ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.2f, 0.7f, 1.0f, 1.0f));
-    // ImPlot::PushStyleColor(ImPlotCol_Fill, ImVec4(0.2f, 0.7f, 1.0f, 0.25f));
 
     ImPlot::SetNextAxesLimits(
         m_ZoomMin, m_ZoomMax,
@@ -218,35 +238,28 @@ void WaveformPanel::RenderWaveform()
         ImPlot::SetupAxis(ImAxis_Y1, "Amplitude");
         ImPlot::SetupAxisLimitsConstraints(ImAxis_Y1, -1.05, 1.05);
 
-        const int n = static_cast<int>(m_View.time.size());
+        const int n = timeSize;
 
-        // Shaded envelope band (min → max per bucket)
-        ImPlot::PlotShaded(
-            "##env",
-            m_View.time.data(),
-            m_View.minEnv.data(),
-            m_View.maxEnv.data(),
-            n
-        );
+        if (n > 0) {
+            ImPlot::PlotShaded(
+                "##env",
+                m_View.time.data(),
+                m_View.minEnv.data(),
+                m_View.maxEnv.data(),
+                n
+            );
 
-        // Upper and lower envelope lines for crispness
-        ImPlot::PlotLine("##max", m_View.time.data(), m_View.maxEnv.data(), n);
-        ImPlot::PlotLine("##min", m_View.time.data(), m_View.minEnv.data(), n);
+            ImPlot::PlotLine("##max", m_View.time.data(), m_View.maxEnv.data(), n);
+            ImPlot::PlotLine("##min", m_View.time.data(), m_View.minEnv.data(), n);
 
-        // Zero line
-        ImPlot::PopStyleColor(2); // pop Line + Fill to override colour
-        // ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(1.0f, 1.0f, 1.0f, 0.15f));
-        const double zeroX[2] = { m_View.time.front(), m_View.time.back() };
-        const double zeroY[2] = { 0.0, 0.0 };
-        ImPlot::PlotLine("##zero", zeroX, zeroY, 2);
-        ImPlot::PopStyleColor(1);
-        // ImPlot::PushStyleColor(ImPlotCol_Line, ImVec4(0.2f, 0.7f, 1.0f, 1.0f));
-        // ImPlot::PushStyleColor(ImPlotCol_Fill, ImVec4(0.2f, 0.7f, 1.0f, 0.25f));
+            const double zeroX[2] = { m_View.time.front(), m_View.time.back() };
+            const double zeroY[2] = { 0.0, 0.0 };
+            ImPlot::PlotLine("##zero", zeroX, zeroY, 2);
+        }
 
         ImPlot::EndPlot();
     }
 
-    // ImPlot::PopStyleColor(4);
     ImPlot::PopStyleColor(2);
     ImPlot::PopStyleVar(1);
 }

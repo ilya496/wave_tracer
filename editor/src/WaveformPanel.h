@@ -9,10 +9,25 @@ struct WaveformView {
     std::vector<double> maxEnv; // upper envelope
     uint32_t channel = 0;
     bool ready = false;
+
+    void Reset() {
+        time.clear();
+        minEnv.clear();
+        maxEnv.clear();
+        channel = 0;
+        ready = false;
+    }
 };
 
 class WaveformPanel {
 public:
+    WaveformPanel() {
+        std::cerr << "[WaveformPanel] Constructor called" << std::endl;
+    }
+    ~WaveformPanel() {
+        std::cerr << "[WaveformPanel] Destructor called" << std::endl;
+    }
+
     void OnImGuiRender();
 
     void LoadClip(Ref<AudioClip> clip);
@@ -25,7 +40,7 @@ private:
     void RenderMetadata();
 
 private:
-    Ref<AudioClip> m_Clip;
+    Ref<AudioClip> m_Clip = nullptr;
     WaveformView m_View;
 
     uint32_t m_SelectedChannel = 0;

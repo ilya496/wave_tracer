@@ -46,11 +46,15 @@ public:
     void PollEvents();
     void SwapBuffers();
 
+    std::vector<std::filesystem::path> ConsumeDroppedFiles();
+
     void Close();
 
 private:
     void Init();
     void InitCallbacks();
+
+    void QueueDroppedFile(const char* path);
 
 private:
     GLFWwindow* m_Window = nullptr;
@@ -60,6 +64,8 @@ private:
 
     bool m_IsFullscreen = false;
     GLFWmonitor* m_PreviousMonitor = nullptr;
+
+    std::vector<std::filesystem::path> m_DroppedFiles;
 
     glm::vec2 m_LastMousePos;
 };

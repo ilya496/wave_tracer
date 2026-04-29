@@ -4,6 +4,7 @@ add_library(wave_tracer_engine STATIC
     src/core/Layer.cpp
     src/core/RenderLayer.cpp
     src/import/AudioImporter.cpp
+    src/import/WavDecoder.cpp
 )
 
 target_include_directories(wave_tracer_engine PUBLIC

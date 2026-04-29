@@ -11,10 +11,10 @@ static std::string ToLowerExtension(const std::filesystem::path& filePath) {
 static const std::unordered_map<std::string, AudioFileFormat>& ExtensionMap() {
     static const std::unordered_map<std::string, AudioFileFormat> map =
     {
-        { ".mp3",  AudioFileFormat::MP3 },
-        { ".wav",  AudioFileFormat::WAV },
+        // { ".mp3", AudioFileFormat::MP3 },
+        { ".wav", AudioFileFormat::WAV },
         { ".wave", AudioFileFormat::WAV },
-        { ".flac", AudioFileFormat::FLAC },
+        // { ".flac", AudioFileFormat::FLAC },
     };
 
     return map;
@@ -45,15 +45,17 @@ Ref<AudioClip> AudioImporter::Import(const std::filesystem::path& filePath) {
     }
 
     switch (format) {
-    case AudioFileFormat::MP3:
-        // return ImportMP3(filePath);
-        break;
     case AudioFileFormat::WAV:
         WavDecoder decoder;
         return decoder.Decode(filePath);
+    case AudioFileFormat::MP3:
+        // return ImportMP3(filePath);
+        std::cerr << "[AudioImporter] MP3 not yet supported\n";
+        return nullptr;  // was: break
     case AudioFileFormat::FLAC:
         // return ImportFLAC(filePath);
-        break;
+        std::cerr << "[AudioImporter] FLAC not yet supported\n";
+        return nullptr;  // was: break
     default:
         return nullptr;
     }

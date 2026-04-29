@@ -25,8 +25,7 @@ public:
     const float* Data() const { return m_Samples.data(); }
     size_t Size() const { return m_Samples.size(); }
 
-    bool IsValid() const
-    {
+    bool IsValid() const {
         return !m_Samples.empty()
             && m_Metadata.channels > 0
             && m_Metadata.frameCount > 0
@@ -34,9 +33,9 @@ public:
     }
 
 
-    UUID id;
 private:
-    AudioMetadata      m_Metadata;
+    // UUID id;
+    AudioMetadata m_Metadata;
     std::vector<float> m_Samples;
-    std::string        m_SourcePath;
+    std::string m_SourcePath;
 };

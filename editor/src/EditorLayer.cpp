@@ -46,34 +46,6 @@ void EditorLayer::OnAttach() {
     ImGui_ImplGlfw_InitForOpenGL(m_Window.GetNativeWindow(), true);
     ImGui_ImplOpenGL3_Init("#version 330");
 
-    glfwSetWindowUserPointer(m_Window.GetNativeWindow(), this);
-
-    glfwSetDropCallback(m_Window.GetNativeWindow(),
-        [](GLFWwindow* window, int count, const char** paths)
-        {
-            if (count == 0) return;
-
-            // Only handle the first dropped file for now.
-            // If we later want multi-file support, iterate and queue all paths.
-            auto* layer = static_cast<EditorLayer*>(glfwGetWindowUserPointer(window));
-            if (!layer) return;
-
-            // Prefer audio files if multiple items are dropped simultaneously
-            for (int i = 0; i < count; ++i)
-            {
-                if (AudioImporter::IsSupportedFormat(paths[i]))
-                {
-                    layer->m_PendingDropPath = paths[i];
-                    layer->m_HasPendingDrop = true;
-                    return; // take the first supported file
-                }
-            }
-
-            std::cerr << "[EditorLayer] Dropped file(s) are not a supported audio format.\n";
-        }
-    );
-
-
     EventBus::Subscribe<WindowDpiChangedEvent>(
         [this](WindowDpiChangedEvent& e)
         {
@@ -93,20 +65,17 @@ void EditorLayer::OnDetach() {
 
 void EditorLayer::OnUpdate(float dt)
 {
-    // Consume any pending drop — import happens here (main thread, not in callback)
-    if (m_HasPendingDrop)
+    auto dropped = m_Window.ConsumeDroppedFiles();
+
+    for (auto& path : dropped)
     {
-        m_HasPendingDrop = false;
-        HandleDroppedFile(m_PendingDropPath);
-        m_PendingDropPath.clear();
+        HandleDroppedFile(path);
     }
 
-    // --- ImGui frame start ---
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // --- Fullscreen dockspace ---
     ImGuiWindowFlags windowFlags =
         ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking |
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
@@ -126,7 +95,6 @@ void EditorLayer::OnUpdate(float dt)
     ImGuiID dockspaceID = ImGui::GetID("MyDockspace");
     ImGui::DockSpace(dockspaceID, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
 
-    // --- Menu bar ---
     if (ImGui::BeginMenuBar())
     {
         if (ImGui::BeginMenu("File"))
@@ -157,7 +125,7 @@ void EditorLayer::OnImGuiRender() {
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
 
-void EditorLayer::HandleDroppedFile(const std::string& path)
+void EditorLayer::HandleDroppedFile(const std::filesystem::path& path)
 {
     std::cout << "[EditorLayer] Importing: " << path << "\n";
 
@@ -197,7 +165,4 @@ void EditorLayer::ApplyDpiScaling(float scale) {
 
     ImGui::StyleColorsDark();
     ImGui::GetStyle().ScaleAllSizes(scale);
-
-    // tell renderer to rebuild font textures
-    // ImGui_ImplOpenGL3_DestroyFontsTexture();
 }

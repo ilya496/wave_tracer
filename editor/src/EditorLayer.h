@@ -18,14 +18,14 @@ public:
     void OnDetach() override;
 
 public:
-    void HandleDroppedFile(const std::string& path);
+    void HandleDroppedFile(const std::filesystem::path& path);
     void ApplyDpiScaling(float scale);
 
 public:
     Window& m_Window;
     WaveformPanel m_WaveformPanel;
 
-    std::string m_PendingDropPath;
+    std::filesystem::path m_PendingDropPath;
     bool m_HasPendingDrop = false;
 
 };
