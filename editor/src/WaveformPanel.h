@@ -19,6 +19,23 @@ struct WaveformView {
     }
 };
 
+struct WaveformLOD {
+    std::vector<double> time;
+    std::vector<double> minEnv;
+    std::vector<double> maxEnv;
+};
+
+struct WaveformCache {
+    std::vector<WaveformLOD> levels;
+    uint32_t channel = 0;
+    bool ready = false;
+
+    void Reset() {
+        levels.clear();
+        ready = false;
+    }
+};
+
 class WaveformPanel {
 public:
     WaveformPanel() {
@@ -41,7 +58,9 @@ private:
 
 private:
     Ref<AudioClip> m_Clip = nullptr;
-    WaveformView m_View;
+    // WaveformView m_View;
+    WaveformCache m_Cache;
+    const WaveformLOD* m_CurrentLOD = nullptr;
 
     uint32_t m_SelectedChannel = 0;
     float m_ZoomMin = 0.0f; // seconds

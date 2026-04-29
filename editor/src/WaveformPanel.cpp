@@ -37,50 +37,61 @@ void WaveformPanel::OnImGuiRender() {
 
 void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints)
 {
-    m_View.Reset();
+    m_Cache.Reset();
 
-    if (!m_Clip || !m_Clip->IsValid())
+    if (!m_Clip || !m_Clip->IsValid()) {
+        std::cerr << "[WaveformPanel] BuildWaveformView: invalid clip" << '\n';
         return;
+    }
 
     const auto& samples = m_Clip->GetSamples();
-    const uint32_t chans = m_Clip->GetChannels();
-    const uint64_t frames = m_Clip->GetFrameCount();
-    const float sr = static_cast<float>(m_Clip->GetSampleRate());
+    const uint32_t channels = m_Clip->GetChannels();
+    const uint64_t frameCount = m_Clip->GetFrameCount();
+    const float sampleRate = static_cast<float>(m_Clip->GetSampleRate());
 
-    if (chans == 0 || frames == 0 || sr <= 0.0f)
+    if (channels == 0 || frameCount == 0 || sampleRate <= 0.0f) {
+        std::cerr << "[WaveformPanel] BuildWaveformView: invalid metadata - channels="
+            << channels << " frameCount=" << frameCount
+            << " sampleRate=" << sampleRate << '\n';
         return;
+    }
 
-    const uint64_t expectedSamples = frames * static_cast<uint64_t>(chans);
-    if (samples.size() < expectedSamples)
+    const uint64_t expectedSamples = frameCount * static_cast<uint64_t>(channels);
+    if (samples.size() < expectedSamples) {
+        std::cerr << "[WaveformPanel] BuildWaveformView: sample buffer too small - size="
+            << samples.size() << " expected=" << expectedSamples << '\n';
         return;
+    }
 
-    channel = std::clamp(channel, 0u, chans - 1u);
+    channel = std::clamp(channel, 0u, channels - 1u);
 
-    const size_t buckets = static_cast<size_t>(std::min<uint64_t>(frames, targetPoints));
-    if (buckets == 0)
+    // level 0 - base resolution
+
+    size_t buckets = std::min<uint64_t>(frameCount, targetPoints);
+    if (buckets == 0) {
+        std::cerr << "[WaveformPanel] BuildWaveformView: buckets is 0, returning" << '\n';
         return;
+    }
 
-    const double framesPerBucket = static_cast<double>(frames) / static_cast<double>(buckets);
-
-    m_View.time.resize(buckets);
-    m_View.minEnv.resize(buckets);
-    m_View.maxEnv.resize(buckets);
+    WaveformLOD base;
+    base.time.resize(buckets);
+    base.minEnv.resize(buckets);
+    base.maxEnv.resize(buckets);
 
     for (size_t b = 0; b < buckets; ++b)
     {
-        const uint64_t frameStart = static_cast<uint64_t>(b * framesPerBucket);
-        const uint64_t frameEnd = static_cast<uint64_t>((b + 1) * framesPerBucket);
+        uint64_t start = (b * frameCount) / buckets;
+        uint64_t end = ((b + 1) * frameCount) / buckets;
 
         float minVal = 1.0f;
         float maxVal = -1.0f;
 
-        for (uint64_t f = frameStart; f < frameEnd && f < frames; ++f)
+        for (uint64_t f = start; f < end; ++f)
         {
-            const uint64_t idx = f * static_cast<uint64_t>(chans) + channel;
-            if (idx >= samples.size())
-                break;
+            uint64_t idx = f * channels + channel;
+            if (idx >= samples.size()) break;
 
-            const float s = samples[idx];
+            float s = samples[idx];
             minVal = std::min(minVal, s);
             maxVal = std::max(maxVal, s);
         }
@@ -88,13 +99,40 @@ void WaveformPanel::BuildWaveformView(uint32_t channel, uint32_t targetPoints)
         if (minVal > maxVal)
             minVal = maxVal = 0.0f;
 
-        m_View.time[b] = static_cast<double>(frameStart) / sr;
-        m_View.minEnv[b] = static_cast<double>(minVal);
-        m_View.maxEnv[b] = static_cast<double>(maxVal);
+        base.time[b] = (double)start / sampleRate;
+        base.minEnv[b] = minVal;
+        base.maxEnv[b] = maxVal;
     }
 
-    m_View.channel = channel;
-    m_View.ready = true;
+    m_Cache.levels.push_back(std::move(base));
+
+    // --- Build lower resolutions (downsampling) ---
+    while (m_Cache.levels.back().time.size() > 512)
+    {
+        const WaveformLOD& prev = m_Cache.levels.back();
+        size_t newSize = prev.time.size() / 2;
+
+        WaveformLOD next;
+        next.time.resize(newSize);
+        next.minEnv.resize(newSize);
+        next.maxEnv.resize(newSize);
+
+        for (size_t i = 0; i < newSize; ++i)
+        {
+            size_t i0 = i * 2;
+            size_t i1 = i * 2 + 1;
+
+            next.time[i] = prev.time[i0];
+
+            next.minEnv[i] = std::min(prev.minEnv[i0], prev.minEnv[i1]);
+            next.maxEnv[i] = std::max(prev.maxEnv[i0], prev.maxEnv[i1]);
+        }
+
+        m_Cache.levels.push_back(std::move(next));
+    }
+
+    m_Cache.channel = channel;
+    m_Cache.ready = true;
 
     m_ZoomMin = 0.0f;
     m_ZoomMax = m_Clip->GetDuration();
@@ -201,22 +239,8 @@ void WaveformPanel::RenderMetadata()
 
 void WaveformPanel::RenderWaveform()
 {
-    std::cerr << "[WaveformPanel] RenderWaveform entry ready=" << m_View.ready
-        << " time=" << m_View.time.size()
-        << " minEnv=" << m_View.minEnv.size()
-        << " maxEnv=" << m_View.maxEnv.size() << std::endl;
-
-    if (!m_View.ready) return;
-
-    const int timeSize = static_cast<int>(m_View.time.size());
-    const int minEnvSize = static_cast<int>(m_View.minEnv.size());
-    const int maxEnvSize = static_cast<int>(m_View.maxEnv.size());
-
-    if (timeSize <= 0 || minEnvSize != timeSize || maxEnvSize != timeSize) {
-        std::cerr << "[WaveformPanel] Invalid view data: time=" << timeSize
-            << " minEnv=" << minEnvSize << " maxEnv=" << maxEnvSize << "\n";
+    if (!m_Cache.ready || m_Cache.levels.empty())
         return;
-    }
 
     const ImVec2 plotSize = { -1.0f, -1.0f };
 
@@ -238,22 +262,60 @@ void WaveformPanel::RenderWaveform()
         ImPlot::SetupAxis(ImAxis_Y1, "Amplitude");
         ImPlot::SetupAxisLimitsConstraints(ImAxis_Y1, -2.00, 2.00);
 
-        const int n = timeSize;
+        ImPlotRect limits = ImPlot::GetPlotLimits();
+        double visibleTime = limits.X.Max - limits.X.Min;
 
-        if (n > 0) {
+        float pixels = ImGui::GetContentRegionAvail().x;
+        if (pixels <= 0.0f) pixels = 1.0f;
+
+        // choose best LOD
+        const WaveformLOD* selected = &m_Cache.levels.back(); // fallback (lowest resolution)
+
+        for (const auto& lod : m_Cache.levels)
+        {
+            if (lod.time.empty())
+                continue;
+
+            double samplesPerPixel = (double)lod.time.size() / pixels;
+
+            if (samplesPerPixel < 2.0) // sweet spot
+            {
+                selected = &lod;
+                break;
+            }
+        }
+
+        // validate selected
+        const int n = static_cast<int>(selected->time.size());
+
+        if (n > 0 &&
+            selected->minEnv.size() == selected->time.size() &&
+            selected->maxEnv.size() == selected->time.size())
+        {
             ImPlot::PlotShaded(
                 "##env",
-                m_View.time.data(),
-                m_View.minEnv.data(),
-                m_View.maxEnv.data(),
+                selected->time.data(),
+                selected->minEnv.data(),
+                selected->maxEnv.data(),
                 n
             );
 
-            ImPlot::PlotLine("##max", m_View.time.data(), m_View.maxEnv.data(), n);
-            ImPlot::PlotLine("##min", m_View.time.data(), m_View.minEnv.data(), n);
+            ImPlot::PlotLine("##max",
+                selected->time.data(),
+                selected->maxEnv.data(),
+                n);
 
-            const double zeroX[2] = { m_View.time.front(), m_View.time.back() };
+            ImPlot::PlotLine("##min",
+                selected->time.data(),
+                selected->minEnv.data(),
+                n);
+
+            const double zeroX[2] = {
+                selected->time.front(),
+                selected->time.back()
+            };
             const double zeroY[2] = { 0.0, 0.0 };
+
             ImPlot::PlotLine("##zero", zeroX, zeroY, 2);
         }
 
