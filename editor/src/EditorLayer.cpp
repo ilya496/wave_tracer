@@ -119,36 +119,55 @@ void EditorLayer::OnUpdate(float dt)
 
 
 void EditorLayer::OnImGuiRender() {
-    ImGui::Begin("Wave Tracer Recording Console");
-
     Application& app = Application::Get();
+    AudioDeviceContext* audioCtx = app.GetAudioContext();
 
-    if (!app.IsSystemRecording()) {
-        if (ImGui::Button("● Record Channel 1 (Focusrite Mic Input)")) {
-            // Assuming index 0 maps to your native WASAPI/ALSA Focusrite handle
-            app.StartSystemRecord(0, 48000, 1, "Cache/CaptureCache.wav");
+    ImGui::Begin("Hardware Debugger");
+
+    if (audioCtx) {
+        static std::vector<AudioDeviceInfo> devices = audioCtx->EnumerateInputDevices();
+        static int selectedDevice = 0;
+
+        if (ImGui::Button("Refresh Devices")) {
+            devices = audioCtx->EnumerateInputDevices();
         }
-    }
-    else {
-        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "RECORDING ACTIVE...");
 
-        if (ImGui::Button("■ Stop Recording")) {
-            // Create target placeholder tracking container
-            AudioTrack newRecordingTrack;
-            newRecordingTrack.name = "Vocal Track Input";
-            app.StopSystemRecord(newRecordingTrack);
-
-            // Push newRecordingTrack into your Editor Track Panel timeline layout map here
+        // Show a dropdown of microphones
+        if (ImGui::BeginCombo("Input Device", devices.empty() ? "None" : devices[selectedDevice].name.c_str())) {
+            for (int i = 0; i < devices.size(); i++) {
+                bool isSelected = (selectedDevice == i);
+                if (ImGui::Selectable(devices[i].name.c_str(), isSelected)) {
+                    selectedDevice = i;
+                }
+            }
+            ImGui::EndCombo();
         }
-    }
 
-    // --- Live Waveform Plotting Block via ImPlot ---
-    if (app.IsSystemRecording()) {
-        // We can check how many frames are available inside the engine ring buffer
-        // and snapshot-copy them into a running display window array without altering the storage write pipeline counters!
-        ImPlot::BeginPlot("Live Waveform Visualizer");
-        // Construct standard rolling waveform layouts...
-        ImPlot::EndPlot();
+        // Show the sample rates supported by the selected mic
+        if (!devices.empty()) {
+            ImGui::Text("Supported Exclusive Rates:");
+            for (uint32_t rate : devices[selectedDevice].supportedSampleRates) {
+                ImGui::BulletText("%d Hz", rate);
+            }
+
+            ImGui::Separator();
+
+            if (!app.IsSystemRecording()) {
+                if (ImGui::Button("Start Recording", ImVec2(150, 40))) {
+                    // Grab the first supported rate (or default to 48000 if empty)
+                    uint32_t targetRate = devices[selectedDevice].supportedSampleRates.empty() ? 48000 : devices[selectedDevice].supportedSampleRates.back();
+                    // Start capture!
+                    app.StartSystemRecord(selectedDevice, targetRate, 2, "test_capture.wav");
+                }
+            }
+            else {
+                ImGui::TextColored(ImVec4(1, 0, 0, 1), "RECORDING...");
+                if (ImGui::Button("Stop Recording", ImVec2(150, 40))) {
+                    AudioTrack dummyTrack;
+                    app.StopSystemRecord(dummyTrack);
+                }
+            }
+        }
     }
 
     ImGui::End();

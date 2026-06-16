@@ -5,7 +5,7 @@
 #include "effects/IAudioEffect.h"
 
 struct AudioTrack {
-    UUID id;
+    int id;
     std::string name;
     Ref<AudioClip> clip;
     uint64_t timelineOffset; // in frames
