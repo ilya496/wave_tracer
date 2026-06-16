@@ -119,7 +119,39 @@ void EditorLayer::OnUpdate(float dt)
 
 
 void EditorLayer::OnImGuiRender() {
-    m_WaveformPanel.OnImGuiRender();
+    ImGui::Begin("Wave Tracer Recording Console");
+
+    Application& app = Application::Get();
+
+    if (!app.IsSystemRecording()) {
+        if (ImGui::Button("● Record Channel 1 (Focusrite Mic Input)")) {
+            // Assuming index 0 maps to your native WASAPI/ALSA Focusrite handle
+            app.StartSystemRecord(0, 48000, 1, "Cache/CaptureCache.wav");
+        }
+    }
+    else {
+        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "RECORDING ACTIVE...");
+
+        if (ImGui::Button("■ Stop Recording")) {
+            // Create target placeholder tracking container
+            AudioTrack newRecordingTrack;
+            newRecordingTrack.name = "Vocal Track Input";
+            app.StopSystemRecord(newRecordingTrack);
+
+            // Push newRecordingTrack into your Editor Track Panel timeline layout map here
+        }
+    }
+
+    // --- Live Waveform Plotting Block via ImPlot ---
+    if (app.IsSystemRecording()) {
+        // We can check how many frames are available inside the engine ring buffer
+        // and snapshot-copy them into a running display window array without altering the storage write pipeline counters!
+        ImPlot::BeginPlot("Live Waveform Visualizer");
+        // Construct standard rolling waveform layouts...
+        ImPlot::EndPlot();
+    }
+
+    ImGui::End();
 
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

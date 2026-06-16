@@ -3,6 +3,19 @@
 
 #include "RenderLayer.h"
 
+// Dummy file factory for platform generation - to be linked to WASAPI/ALSA units later
+Scope<AudioDeviceContext> AudioDeviceContext::Create() {
+#if defined(_WIN32)
+    // Return a std::make_unique<WasapiContext>();
+    return nullptr;
+#elif defined(__linux__)
+    // Return a std::make_unique<AlsaContext>();
+    return nullptr;
+#else
+    return nullptr;
+#endif
+}
+
 Application* Application::s_Instance = nullptr;
 
 Application::Application() {
@@ -18,14 +31,16 @@ Application::Application() {
     RenderLayer* renderLayer = new RenderLayer(props.width, props.height);
     PushLayer(renderLayer);
 
-    // Subscribe to events from the EventBus
+    // initialize platform-native hardware context
+    m_AudioContext = AudioDeviceContext::Create();
+
+    // subscribe to events from the EventBus
     EventBus::Subscribe<WindowCloseEvent>([this](Event& e) {
         OnWindowClose(static_cast<WindowCloseEvent&>(e));
         });
     EventBus::Subscribe<WindowResizeEvent>([this](Event& e) {
         OnWindowResize(static_cast<WindowResizeEvent&>(e));
         });
-
 }
 
 Application::~Application() {
@@ -96,4 +111,101 @@ bool Application::OnWindowResize(WindowResizeEvent& e) {
 
     // TODO: Renderer::OnWindowResize(e.GetWidth(), e.GetHeight());
     return false;
+}
+
+bool Application::StartSystemRecord(int deviceId, uint32_t sampleRate, uint32_t channels, const std::filesystem::path& targetPath) {
+    if (m_IsRecording.load() || !m_AudioContext) return false;
+
+    // allocate 2 seconds of safety cushion padding inside the ring buffer frame layout
+    size_t ringBufferCapacity = static_cast<size_t>(sampleRate) * channels * 2;
+    // round to the next power of two for optimal performance
+    size_t powerOfTwo = 1;
+    while (powerOfTwo < ringBufferCapacity) powerOfTwo <<= 1;
+
+    m_RecordingRingBuffer = CreateRef<RingBuffer<float>>(powerOfTwo);
+
+    if (!m_AudioContext->InitializeCapture(deviceId, sampleRate, channels, 512)) {
+        std::cerr << "[Application]: Failed to initialize hardware capture lines.\n";
+        return false;
+    }
+
+    m_ActiveOutputFilePath = targetPath;
+    m_ActiveRecordSampleRate = sampleRate;
+    m_ActiveRecordChannels = channels;
+    m_IsRecording.store(true);
+
+    // kickstart the background asynchronous disk pipeline thread
+    m_StorageWriterThread = std::thread(&Application::StorageWriterThreadWorker, this, targetPath, sampleRate, channels);
+
+    // safely open up the native hardware capture callbacks
+    if (!m_AudioContext->StartCapture(m_RecordingRingBuffer)) {
+        m_IsRecording.store(false);
+        if (m_StorageWriterThread.joinable()) m_StorageWriterThread.join();
+        return false;
+    }
+
+    return true;
+}
+
+void Application::StopSystemRecord(AudioTrack& targetTrackToFill) {
+    if (!m_IsRecording.load()) return;
+
+    // instantly silence incoming hardware delivery lines
+    m_AudioContext->StopCapture();
+
+    // flag background disk execution to clean up and exit
+    m_IsRecording.store(false);
+
+    if (m_StorageWriterThread.joinable()) {
+        m_StorageWriterThread.join();
+    }
+
+    // since writing is complete, read back metadata from disk using the decoder to fill the UI track
+    // targetTrackToFill.clip = AudioImporter::Import(m_ActiveOutputFilePath);
+    std::cout << "[Application] Threaded capture session completed successfully.\n";
+}
+
+void Application::StorageWriterThreadWorker(std::filesystem::path outputPath, uint32_t sampleRate, uint32_t channels) {
+    std::cout << "[Storage Thread] Disk serialization thread spawned successfully.\n";
+
+    // open the raw target recording layout using your engine's existing exporter tooling structures
+    // for raw prototyping or missing writer tools, we can construct standard linear file headers:
+    std::ofstream file(outputPath, std::ios::binary);
+    if (!file.is_open()) {
+        m_IsRecording.store(false);
+        return;
+    }
+
+    // Placeholder: Write mock wav structure headers or call direct dr_wav generation functions here
+    // drwav_init_file_write(), etc...
+
+    std::vector<float> syncProcessingBuffer(4096);
+
+    while (m_IsRecording.load() || m_RecordingRingBuffer->GetAvailableRead() > 0) {
+        size_t readyFrames = m_RecordingRingBuffer->GetAvailableRead();
+        if (readyFrames == 0) {
+            // no data yet; yield CPU execution back to the OS scheduler for a millisecond
+            std::this_thread::sleep_for(std::chrono::microseconds(1));
+            continue;
+        }
+
+        size_t sampleToRead = std::min(syncProcessingBuffer.size(), readyFrames);
+        size_t readCount = m_RecordingRingBuffer->Read(syncProcessingBuffer.data(), sampleToRead);
+
+        if (readCount > 0) {
+            // write raw PCM sample blocks directly to storage disk media
+            file.write(reinterpret_cast<const char*>(syncProcessingBuffer.data()), readCount * sizeof(float));
+        }
+    }
+
+    file.close();
+    std::cout << "[Storage Thread] Disk serialization thread terminated cleanly.\n";
+}
+
+void Application::Shutdown() {
+    if (m_IsRecording.load()) {
+        m_AudioContext->StopCapture();
+        m_IsRecording.store(false);
+        if (m_StorageWriterThread.joinable()) m_StorageWriterThread.join();
+    }
 }
