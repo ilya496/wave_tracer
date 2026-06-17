@@ -23,10 +23,14 @@ public:
     void StopCapture() override;
     bool IsCapturing() const override { return m_IsCapturing.load(); }
 
+    uint32_t GetActiveSampleRate() const override { return m_CurrentSampleRate; }
+    uint32_t GetActiveChannels() const override { return m_CurrentChannels; }
+
 private:
     void CaptureThreadWorker();
     ComPtr<IMMDevice> GetDeviceById(int deviceId);
     WAVEFORMATEXTENSIBLE BuildFloatFormat(uint32_t sampleRate, uint32_t channels);
+    WAVEFORMATEX* NegotiateFormat(IAudioClient* client, uint32_t sampleRate, uint32_t channels);
 
 private:
     std::vector<std::wstring> m_DeviceEndpointIds; // Maps int ID to Windows COM string ID
@@ -39,8 +43,11 @@ private:
     HANDLE m_BufferEvent = nullptr;
     HANDLE m_StopEvent = nullptr;
 
+    WAVEFORMATEX* m_ActiveFormat = nullptr;
+
     std::thread m_CaptureThread;
     std::atomic<bool> m_IsCapturing{ false };
 
     uint32_t m_CurrentChannels = 0;
+    uint32_t m_CurrentSampleRate = 0;
 };

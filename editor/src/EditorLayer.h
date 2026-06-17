@@ -5,8 +5,6 @@
 #include "core/Layer.h"
 #include "core/Window.h"
 
-#include "WaveformPanel.h"
-
 class EditorLayer : public Layer {
 public:
     EditorLayer(Window& window);
@@ -23,7 +21,6 @@ public:
 
 public:
     Window& m_Window;
-    WaveformPanel m_WaveformPanel;
 
     std::filesystem::path m_PendingDropPath;
     bool m_HasPendingDrop = false;

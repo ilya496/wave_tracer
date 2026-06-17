@@ -17,6 +17,9 @@ public:
     virtual void StopCapture() = 0;
     virtual bool IsCapturing() const = 0;
 
+    virtual uint32_t GetActiveSampleRate() const = 0;
+    virtual uint32_t GetActiveChannels() const = 0;
+
     // factory method to initialize the proper platform context instance natively
     static Scope<AudioDeviceContext> Create();
 };

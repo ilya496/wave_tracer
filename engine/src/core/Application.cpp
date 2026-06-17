@@ -115,32 +115,43 @@ bool Application::OnWindowResize(WindowResizeEvent& e) {
     return false;
 }
 
-bool Application::StartSystemRecord(int deviceId, uint32_t sampleRate, uint32_t channels, const std::filesystem::path& targetPath) {
+bool Application::StartSystemRecord(int deviceId, uint32_t requestedRate, uint32_t requestedChannels, const std::filesystem::path& targetPath) {
     if (m_IsRecording.load() || !m_AudioContext) return false;
 
-    // allocate 2 seconds of safety cushion padding inside the ring buffer frame layout
-    size_t ringBufferCapacity = static_cast<size_t>(sampleRate) * channels * 2;
-    // round to the next power of two for optimal performance
+    // 1. Initialize the hardware context FIRST so we can discover what Windows actually allowed
+    if (!m_AudioContext->InitializeCapture(deviceId, requestedRate, requestedChannels, 512)) {
+        std::cerr << "[Application]: Failed to initialize hardware capture lines.\n";
+        return false;
+    }
+
+    // 2. Extract the actual reality of our hardware configuration
+    uint32_t actualRate = m_AudioContext->GetActiveSampleRate();
+    uint32_t actualChannels = m_AudioContext->GetActiveChannels();
+
+    std::cout << "[Application] Initialized hardware. Requested: " << requestedRate << "Hz/" << requestedChannels
+        << "ch -> Actual: " << actualRate << "Hz/" << actualChannels << "ch\n";
+
+    // 3. Allocate safety cushion padding inside the ring buffer based on ACTUAL layout
+    size_t ringBufferCapacity = static_cast<size_t>(actualRate) * actualChannels * 2;
+
+    // Round to the next power of two for optimal performance
     size_t powerOfTwo = 1;
     while (powerOfTwo < ringBufferCapacity) powerOfTwo <<= 1;
 
     m_RecordingRingBuffer = CreateRef<RingBuffer<float>>(powerOfTwo);
 
-    if (!m_AudioContext->InitializeCapture(deviceId, sampleRate, channels, 512)) {
-        std::cerr << "[Application]: Failed to initialize hardware capture lines.\n";
-        return false;
-    }
-
+    // 4. Record state using the ACTUAL values so WAV writers downstream get the proper settings
     m_ActiveOutputFilePath = targetPath;
-    m_ActiveRecordSampleRate = sampleRate;
-    m_ActiveRecordChannels = channels;
+    m_ActiveRecordSampleRate = actualRate;
+    m_ActiveRecordChannels = actualChannels;
     m_IsRecording.store(true);
 
-    // kickstart the background asynchronous disk pipeline thread
-    m_StorageWriterThread = std::thread(&Application::StorageWriterThreadWorker, this, targetPath, sampleRate, channels);
+    // 5. Kickstart the background disk pipeline thread with ACTUAL hardware parameters
+    m_StorageWriterThread = std::thread(&Application::StorageWriterThreadWorker, this, targetPath, actualRate, actualChannels);
 
-    // safely open up the native hardware capture callbacks
+    // 6. Safely open up the native hardware capture callbacks
     if (!m_AudioContext->StartCapture(m_RecordingRingBuffer)) {
+        std::cerr << "[Application]: Failed to start hardware capture thread loop.\n";
         m_IsRecording.store(false);
         if (m_StorageWriterThread.joinable()) m_StorageWriterThread.join();
         return false;

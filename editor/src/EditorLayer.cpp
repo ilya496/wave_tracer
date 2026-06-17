@@ -125,16 +125,30 @@ void EditorLayer::OnImGuiRender() {
     ImGui::Begin("Hardware Debugger");
 
     if (audioCtx) {
-        static std::vector<AudioDeviceInfo> devices = audioCtx->EnumerateInputDevices();
+        // Use an initialization flag instead of inline assignment to handle late-auth audio contexts safely
+        static std::vector<AudioDeviceInfo> devices;
+        static bool firstFrame = true;
+        if (firstFrame) {
+            devices = audioCtx->EnumerateInputDevices();
+            firstFrame = false;
+        }
+
         static int selectedDevice = 0;
 
         if (ImGui::Button("Refresh Devices")) {
             devices = audioCtx->EnumerateInputDevices();
         }
 
+        // DEFENSIVE CHECK: Guard against device list shrinkage or empty sets
+        if (selectedDevice >= static_cast<int>(devices.size())) {
+            selectedDevice = 0;
+        }
+
+        bool hasDevices = !devices.empty();
+
         // Show a dropdown of microphones
-        if (ImGui::BeginCombo("Input Device", devices.empty() ? "None" : devices[selectedDevice].name.c_str())) {
-            for (int i = 0; i < devices.size(); i++) {
+        if (ImGui::BeginCombo("Input Device", hasDevices ? devices[selectedDevice].name.c_str() : "No Active Devices Found")) {
+            for (int i = 0; i < static_cast<int>(devices.size()); i++) {
                 bool isSelected = (selectedDevice == i);
                 if (ImGui::Selectable(devices[i].name.c_str(), isSelected)) {
                     selectedDevice = i;
@@ -144,30 +158,41 @@ void EditorLayer::OnImGuiRender() {
         }
 
         // Show the sample rates supported by the selected mic
-        if (!devices.empty()) {
-            ImGui::Text("Supported Exclusive Rates:");
-            for (uint32_t rate : devices[selectedDevice].supportedSampleRates) {
-                ImGui::BulletText("%d Hz", rate);
+        if (hasDevices) {
+            ImGui::Text("Supported Exclusive/Shared Rates:");
+
+            // Safety guard for empty rate vectors
+            if (devices[selectedDevice].supportedSampleRates.empty()) {
+                ImGui::TextDisabled("  No standard rates verified.");
+            }
+            else {
+                for (uint32_t rate : devices[selectedDevice].supportedSampleRates) {
+                    ImGui::BulletText("%d Hz", rate);
+                }
             }
 
             ImGui::Separator();
 
             if (!app.IsSystemRecording()) {
                 if (ImGui::Button("Start Recording", ImVec2(150, 40))) {
-                    // Grab the first supported rate (or default to 48000 if empty)
-                    uint32_t targetRate = devices[selectedDevice].supportedSampleRates.empty() ? 48000 : devices[selectedDevice].supportedSampleRates.back();
-                    // Start capture!
-                    app.StartSystemRecord(selectedDevice, targetRate, 2, "test_capture.wav");
+                    // Fallback to 48k if list querying failed completely
+                    uint32_t targetRate = devices[selectedDevice].supportedSampleRates.empty() ? 48000 : devices[selectedDevice].supportedSampleRates.front();
+
+                    // Passing 4 channels here to perfectly accommodate your Intel microphone matrix array
+                    app.StartSystemRecord(selectedDevice, targetRate, 4, "test_capture.wav");
                 }
             }
             else {
-                ImGui::TextColored(ImVec4(1, 0, 0, 1), "RECORDING...");
+                ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "RECORDING...");
                 if (ImGui::Button("Stop Recording", ImVec2(150, 40))) {
                     AudioTrack dummyTrack;
                     app.StopSystemRecord(dummyTrack);
                 }
             }
         }
+    }
+    else {
+        ImGui::TextColored(ImVec4(1.0f, 1.0f, 0.0f, 1.0f), "Warning: Audio Subsystem Context Not Initialized.");
     }
 
     ImGui::End();
@@ -192,8 +217,6 @@ void EditorLayer::HandleDroppedFile(const std::filesystem::path& path)
         << clip->GetSampleRate() << " Hz, "
         << clip->GetChannels() << " ch, "
         << clip->GetDuration() << "s\n";
-
-    m_WaveformPanel.LoadClip(clip);
 }
 
 

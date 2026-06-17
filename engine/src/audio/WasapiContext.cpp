@@ -13,6 +13,7 @@ WasapiContext::~WasapiContext() {
     StopCapture();
     if (m_BufferEvent) CloseHandle(m_BufferEvent);
     if (m_StopEvent) CloseHandle(m_StopEvent);
+    if (m_ActiveFormat) CoTaskMemFree(m_ActiveFormat);
     CoUninitialize();
 }
 
@@ -65,15 +66,47 @@ std::vector<AudioDeviceInfo> WasapiContext::EnumerateInputDevices() {
         ComPtr<IAudioClient> testClient;
         hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&testClient);
         if (SUCCEEDED(hr)) {
+            // query the device's native channel layout
+            WAVEFORMATEX* mixFormat = nullptr;
+            uint32_t nativeChannels = 2;
+            if (SUCCEEDED(testClient->GetMixFormat(&mixFormat))) {
+                nativeChannels = mixFormat->nChannels;
+                CoTaskMemFree(mixFormat);
+            }
+
+            // build our channel test list dynamically
+            std::vector<uint32_t> channelsToTest = { 1, 2 };
+            if (nativeChannels > 2) {
+                channelsToTest.push_back(nativeChannels);
+            }
+
+            // query supported rates against the dynamic channel list
             for (uint32_t rate : ratesToTest) {
-                // test if the device supports this rate in mono or stereo
-                WAVEFORMATEXTENSIBLE fmtMono = BuildFloatFormat(rate, 1);
-                WAVEFORMATEXTENSIBLE fmtStereo = BuildFloatFormat(rate, 2);
+                bool rateSupported = false;
 
-                HRESULT hrMono = testClient->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &fmtMono.Format, nullptr);
-                HRESULT hrStereo = testClient->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &fmtStereo.Format, nullptr);
+                for (uint32_t channels : channelsToTest) {
+                    WAVEFORMATEXTENSIBLE fmt = BuildFloatFormat(rate, channels);
 
-                if (hrMono == S_OK || hrStereo == S_OK) {
+                    // test exclusive mode
+                    HRESULT hrExcl = testClient->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &fmt.Format, nullptr);
+
+                    if (hrExcl == S_OK) {
+                        rateSupported = true;
+                        break;
+                    }
+
+                    // check if the shared mode engine can handle/resample this rate
+                    WAVEFORMATEX* closestMatch = nullptr;
+                    HRESULT hrShared = testClient->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED, &fmt.Format, &closestMatch);
+                    if (closestMatch) CoTaskMemFree(closestMatch);
+
+                    if (hrShared == S_OK || hrShared == S_FALSE) { // S_FALSE means engine accepts it with internal resampling
+                        rateSupported = true;
+                        break;
+                    }
+                }
+
+                if (rateSupported) {
                     info.supportedSampleRates.push_back(rate);
                 }
             }
@@ -105,10 +138,19 @@ WAVEFORMATEXTENSIBLE WasapiContext::BuildFloatFormat(uint32_t sampleRate, uint32
     wfext.Format.cbSize = 22; // size of the extensible payload
 
     wfext.Samples.wValidBitsPerSample = 32;
-    // default speaker mapping: mono or stereo
-    wfext.dwChannelMask = (channels == 1) ? SPEAKER_FRONT_CENTER : (SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT);
-    wfext.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
 
+    // handle multi - channel arrays cleanly
+    if (channels == 1) {
+        wfext.dwChannelMask = SPEAKER_FRONT_CENTER;
+    }
+    else if (channels == 2) {
+        wfext.dwChannelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    }
+    else {
+        wfext.dwChannelMask = 0; // Explicitly tells Windows to use native microphone array routing
+    };
+
+    wfext.SubFormat = KSDATAFORMAT_SUBTYPE_IEEE_FLOAT;
     return wfext;
 }
 
@@ -121,48 +163,68 @@ bool WasapiContext::InitializeCapture(int deviceId, uint32_t sampleRate, uint32_
     HRESULT hr = device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, (void**)&m_AudioClient);
     if (FAILED(hr)) return false;
 
-    // --- DEBUG BLOCK: Ask Windows what the device natively wants ---
-    WAVEFORMATEX* pwfx = nullptr;
-    m_AudioClient->GetMixFormat(&pwfx);
-    if (pwfx) {
-        std::cout << "\n[WASAPI DEBUG] Device Native Format:\n";
-        std::cout << "  Channels: " << pwfx->nChannels << "\n";
-        std::cout << "  Sample Rate: " << pwfx->nSamplesPerSec << "\n";
-        std::cout << "  Bits per Sample: " << pwfx->wBitsPerSample << "\n";
-        if (pwfx->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
-            WAVEFORMATEXTENSIBLE* pEx = (WAVEFORMATEXTENSIBLE*)pwfx;
-            std::cout << "  Valid Bits per Sample: " << pEx->Samples.wValidBitsPerSample << "\n";
-            if (pEx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) std::cout << "  Format: 32-bit Float\n";
-            else std::cout << "  Format: PCM Integer\n";
-        }
-        CoTaskMemFree(pwfx);
+    if (m_ActiveFormat) {
+        CoTaskMemFree(m_ActiveFormat);
+        m_ActiveFormat = nullptr;
     }
-    // ---------------------------------------------------------------
 
-    WAVEFORMATEXTENSIBLE format = BuildFloatFormat(sampleRate, channels);
-    m_CurrentChannels = channels;
+    m_ActiveFormat = NegotiateFormat(m_AudioClient.Get(), sampleRate, channels);
 
-    // REFERENCE_TIME is 100-nanosecond units. 
-    // Example: 10 milliseconds = 100,000 units.
-    REFERENCE_TIME hnsRequestedDuration = 100000;
+    REFERENCE_TIME hnsRequestedDuration = 100000; // 10ms
+    bool useExclusive = (m_ActiveFormat != nullptr);
 
-    // initialize in EXCLUSIVE mode, requesting Event Driven buffering
-    hr = m_AudioClient->Initialize(
-        AUDCLNT_SHAREMODE_EXCLUSIVE,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
-        hnsRequestedDuration,
-        hnsRequestedDuration,
-        &format.Format,
-        nullptr
-    );
+    if (useExclusive) {
+        // attempt EXCLUSIVE mode initialization
+        hr = m_AudioClient->Initialize(
+            AUDCLNT_SHAREMODE_EXCLUSIVE,
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            hnsRequestedDuration,
+            hnsRequestedDuration,
+            m_ActiveFormat,
+            nullptr
+        );
+    }
+    else {
+        // if negotiation failed entirely, force fallback evaluation
+        hr = 0x8889000A;
+    }
 
-    if (hr == AUDCLNT_E_UNSUPPORTED_FORMAT) {
-        std::cerr << "[WASAPI] Hardware rejected the format. Check if device sample rate matches requested rate.\n";
+    // 3. if exclusive mode is rejected or device is busy, pivot to SHARED mode
+    if (hr == 0x8889000A) { // AUDCLNT_E_DEVICE_IN_USE
+        std::cout << "[WASAPI] Exclusive mode blocked (Device In Use). Falling back to Shared Mode...\n";
+
+        if (m_ActiveFormat) {
+            CoTaskMemFree(m_ActiveFormat);
+            m_ActiveFormat = nullptr;
+        }
+
+        // shared mode strictly requires using the Windows mix format engine
+        hr = m_AudioClient->GetMixFormat(&m_ActiveFormat);
+        if (FAILED(hr)) return false;
+
+        // force engine alignment to whatever layout the shared engine is running
+        m_CurrentChannels = m_ActiveFormat->nChannels;
+
+        hr = m_AudioClient->Initialize(
+            AUDCLNT_SHAREMODE_SHARED,
+            AUDCLNT_STREAMFLAGS_EVENTCALLBACK,
+            0, // Must be 0 for Shared Mode event-driven operations
+            0, // Must be 0 for Shared Mode event-driven operations
+            m_ActiveFormat,
+            nullptr
+        );
+    }
+
+    if (FAILED(hr)) {
+        std::cerr << "[WASAPI] Initialization failed completely with HRESULT: 0x" << std::hex << hr << std::dec << "\n";
         return false;
     }
-    if (FAILED(hr)) return false;
 
-    // create the threading events
+    // update sample rate and channels for the processing worker thread
+    m_CurrentChannels = m_ActiveFormat->nChannels;
+    m_CurrentSampleRate = m_ActiveFormat->nSamplesPerSec;
+
+    // create the threading loop synchronization handles
     m_BufferEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
     m_StopEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
 
@@ -208,10 +270,10 @@ void WasapiContext::StopCapture() {
 }
 
 void WasapiContext::CaptureThreadWorker() {
-    // vital! new threads must initialize COM to use COM interfaces
+    // new threads must initialize COM to use COM interfaces
     CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 
-    // bump thread priority to Real-Time to prevent audio dropouts
+    // bump thread priority to real-time to prevent audio dropouts
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
 
     HANDLE waitArray[2] = { m_StopEvent, m_BufferEvent };
@@ -237,16 +299,64 @@ void WasapiContext::CaptureThreadWorker() {
 
                 // handle data extraction
                 if (flags & AUDCLNT_BUFFERFLAGS_SILENT) {
-                    // hardware requested silence (write zeros to ring buffer)
+                    // hardware requested silence - write zeros to buffer
                     std::vector<float> silence(numFramesAvailable * m_CurrentChannels, 0.0f);
                     m_TargetBuffer->Write(silence.data(), silence.size());
                 }
                 else {
-                    // we know we requested KSDATAFORMAT_SUBTYPE_IEEE_FLOAT (32-bit float)
-                    // we can directly cast the byte array and push it to the ring buffer
-                    float* pSamples = reinterpret_cast<float*>(pData);
                     size_t totalSamples = (size_t)numFramesAvailable * m_CurrentChannels;
-                    m_TargetBuffer->Write(pSamples, totalSamples);
+
+                    // check which format we negotiated
+                    bool isFloat = false;
+                    uint16_t bitsPerSample = m_ActiveFormat->wBitsPerSample;
+
+                    if (m_ActiveFormat->wFormatTag == WAVE_FORMAT_IEEE_FLOAT) {
+                        isFloat = true;
+                    }
+                    else if (m_ActiveFormat->wFormatTag == WAVE_FORMAT_EXTENSIBLE) {
+                        WAVEFORMATEXTENSIBLE* pEx = (WAVEFORMATEXTENSIBLE*)m_ActiveFormat;
+                        if (pEx->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT) isFloat = true;
+                    }
+
+                    if (isFloat) {
+                        float* pSamples = reinterpret_cast<float*>(pData);
+                        m_TargetBuffer->Write(pSamples, totalSamples);
+                    }
+                    else {
+                        // hardware gave us PCM integer samples. Convert them to float in the
+                        // range [-1.0f, 1.0f) based on the bit depth that was negotiated.
+                        std::vector<float> convertedSamples(totalSamples);
+                        constexpr float kInt32ToFloat = 1.0f / 2147483648.0f; // 2^31
+                        constexpr float kInt24ToFloat = 1.0f / 8388608.0f;    // 2^23
+                        constexpr float kInt16ToFloat = 1.0f / 32768.0f;      // 2^15
+
+                        if (bitsPerSample == 32) {
+                            int32_t* pIntSamples = reinterpret_cast<int32_t*>(pData);
+                            for (size_t i = 0; i < totalSamples; i++) {
+                                convertedSamples[i] = static_cast<float>(pIntSamples[i]) * kInt32ToFloat;
+                            }
+                        }
+                        else if (bitsPerSample == 24) {
+                            uint8_t* pByteData = reinterpret_cast<uint8_t*>(pData);
+                            for (size_t i = 0; i < totalSamples; i++) {
+                                size_t base = i * 3;
+                                // reconstruct 24-bit little-endian signed integer.
+                                // the highest byte is sign-extended via cast to int8_t.
+                                int32_t sample = (pByteData[base] |
+                                    (pByteData[base + 1] << 8) |
+                                    (static_cast<int32_t>(static_cast<int8_t>(pByteData[base + 2])) << 16));
+                                convertedSamples[i] = static_cast<float>(sample) * kInt24ToFloat;
+                            }
+                        }
+                        else if (bitsPerSample == 16) {
+                            int16_t* pIntSamples = reinterpret_cast<int16_t*>(pData);
+                            for (size_t i = 0; i < totalSamples; i++) {
+                                convertedSamples[i] = static_cast<float>(pIntSamples[i]) * kInt16ToFloat;
+                            }
+                        }
+
+                        m_TargetBuffer->Write(convertedSamples.data(), totalSamples);
+                    }
                 }
 
                 hr = m_CaptureClient->ReleaseBuffer(numFramesAvailable);
@@ -256,4 +366,99 @@ void WasapiContext::CaptureThreadWorker() {
     }
 
     CoUninitialize();
+}
+
+WAVEFORMATEX* WasapiContext::NegotiateFormat(IAudioClient* client, uint32_t sampleRate, uint32_t channels) {
+    DWORD channelMask = 0;
+    if (channels == 1) channelMask = SPEAKER_FRONT_CENTER;
+    else if (channels == 2) channelMask = SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT;
+    else channelMask = 0; // safe fallback for 4+ channel microphone arrays
+
+    // 32-bit Float Extensible
+    WAVEFORMATEXTENSIBLE wfxFloatExt = BuildFloatFormat(sampleRate, channels);
+    if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxFloatExt.Format, nullptr) == S_OK) {
+        std::cout << "[WASAPI] Hardware accepted 32-bit Float Extensible.\n";
+        WAVEFORMATEX* res = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE));
+        memcpy(res, &wfxFloatExt, sizeof(WAVEFORMATEXTENSIBLE));
+        return res;
+    }
+
+    // 24/32-bit PCM Integer Extensible
+    WAVEFORMATEXTENSIBLE wfxIntExt = {};
+    wfxIntExt.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    wfxIntExt.Format.nChannels = (WORD)channels;
+    wfxIntExt.Format.nSamplesPerSec = sampleRate;
+    wfxIntExt.Format.wBitsPerSample = 32;
+    wfxIntExt.Format.nBlockAlign = (channels * 32) / 8;
+    wfxIntExt.Format.nAvgBytesPerSec = sampleRate * wfxIntExt.Format.nBlockAlign;
+    wfxIntExt.Format.cbSize = 22;
+    wfxIntExt.Samples.wValidBitsPerSample = 24;
+    wfxIntExt.dwChannelMask = channelMask;
+    wfxIntExt.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+
+    if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxIntExt.Format, nullptr) == S_OK) {
+        std::cout << "[WASAPI] Hardware accepted 24/32-bit Integer PCM Extensible.\n";
+        WAVEFORMATEX* res = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE));
+        memcpy(res, &wfxIntExt, sizeof(WAVEFORMATEXTENSIBLE));
+        return res;
+    }
+
+    // 16-bit PCM Integer Extensible
+    WAVEFORMATEXTENSIBLE wfxInt16Ext = {};
+    wfxInt16Ext.Format.wFormatTag = WAVE_FORMAT_EXTENSIBLE;
+    wfxInt16Ext.Format.nChannels = (WORD)channels;
+    wfxInt16Ext.Format.nSamplesPerSec = sampleRate;
+    wfxInt16Ext.Format.wBitsPerSample = 16;
+    wfxInt16Ext.Format.nBlockAlign = (channels * 16) / 8;
+    wfxInt16Ext.Format.nAvgBytesPerSec = sampleRate * wfxInt16Ext.Format.nBlockAlign;
+    wfxInt16Ext.Format.cbSize = 22;
+    wfxInt16Ext.Samples.wValidBitsPerSample = 16;
+    wfxInt16Ext.dwChannelMask = channelMask;
+    wfxInt16Ext.SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+
+    if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxInt16Ext.Format, nullptr) == S_OK) {
+        std::cout << "[WASAPI] Hardware accepted 16-bit Integer PCM Extensible.\n";
+        WAVEFORMATEX* res = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEXTENSIBLE));
+        memcpy(res, &wfxInt16Ext, sizeof(WAVEFORMATEXTENSIBLE));
+        return res;
+    }
+
+    // fallbacks for legacy 1-2 channel devices below
+    if (channels <= 2) {
+        // standard 32-bit Float (Legacy)
+        WAVEFORMATEX wfxFloatStd = {};
+        wfxFloatStd.wFormatTag = WAVE_FORMAT_IEEE_FLOAT;
+        wfxFloatStd.nChannels = (WORD)channels;
+        wfxFloatStd.nSamplesPerSec = sampleRate;
+        wfxFloatStd.wBitsPerSample = 32;
+        wfxFloatStd.nBlockAlign = (channels * 32) / 8;
+        wfxFloatStd.nAvgBytesPerSec = sampleRate * wfxFloatStd.nBlockAlign;
+        wfxFloatStd.cbSize = 0;
+
+        if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxFloatStd, nullptr) == S_OK) {
+            std::cout << "[WASAPI] Hardware accepted Standard 32-bit Float.\n";
+            WAVEFORMATEX* res = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+            memcpy(res, &wfxFloatStd, sizeof(WAVEFORMATEX));
+            return res;
+        }
+
+        // standard 16-bit Integer PCM (Legacy)
+        WAVEFORMATEX wfxInt16Std = {};
+        wfxInt16Std.wFormatTag = WAVE_FORMAT_PCM;
+        wfxInt16Std.nChannels = (WORD)channels;
+        wfxInt16Std.nSamplesPerSec = sampleRate;
+        wfxInt16Std.wBitsPerSample = 16;
+        wfxInt16Std.nBlockAlign = (channels * 16) / 8;
+        wfxInt16Std.nAvgBytesPerSec = sampleRate * wfxInt16Std.nBlockAlign;
+        wfxInt16Std.cbSize = 0;
+
+        if (client->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE, &wfxInt16Std, nullptr) == S_OK) {
+            std::cout << "[WASAPI] Hardware accepted Standard 16-bit Integer PCM.\n";
+            WAVEFORMATEX* res = (WAVEFORMATEX*)CoTaskMemAlloc(sizeof(WAVEFORMATEX));
+            memcpy(res, &wfxInt16Std, sizeof(WAVEFORMATEX));
+            return res;
+        }
+    }
+
+    return nullptr;
 }
